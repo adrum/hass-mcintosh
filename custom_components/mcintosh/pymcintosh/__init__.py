@@ -555,9 +555,10 @@ async def async_get_mcintosh(
 
     client = McIntoshAsync(model_id, model_config, protocol)
 
-    # send connection init command if specified
+    # send connection init command if specified; no reply is expected since this
+    # is what enables replies (device may currently be at verbosity 0)
     if init_cmd := model_config.get('connection_init'):
-        await client._send_command(init_cmd)
+        await client._send_command(init_cmd, wait_for_reply=False)
 
     return client
 
@@ -590,11 +591,12 @@ class McIntoshSync:
         self.channel_trim = ChannelTrimControl(self)
         self.device = DeviceControl(self)
 
-        # send connection init if specified
+        # send connection init if specified; no reply is expected since this is
+        # what enables replies (device may currently be at verbosity 0)
         if init_cmd := self._model_config.get('connection_init'):
-            self._send_command(init_cmd)
+            self._send_command(init_cmd, wait_for_reply=False)
 
-    def _send_command(self, command: str) -> str | None:
+    def _send_command(self, command: str, wait_for_reply: bool = True) -> str | None:
         """Send command and return response."""
         with self._lock:
             # clear buffers
@@ -608,6 +610,9 @@ class McIntoshSync:
             # send
             self._port.write(request)
             self._port.flush()
+
+            if not wait_for_reply:
+                return None
 
             # read response
             result = bytearray()
@@ -650,10 +655,12 @@ class McIntoshAsync:
         self.channel_trim = AsyncChannelTrimControl(self)
         self.device = AsyncDeviceControl(self)
 
-    async def _send_command(self, command: str) -> str | None:
+    async def _send_command(
+        self, command: str, wait_for_reply: bool = True
+    ) -> str | None:
         """Send command and return response."""
         request = (command + COMMAND_EOL).encode('ascii')
-        return await self._protocol.send(request)
+        return await self._protocol.send(request, wait_for_reply=wait_for_reply)
 
 
 # async versions of control classes
