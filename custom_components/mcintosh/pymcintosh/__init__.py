@@ -25,6 +25,26 @@ __version__ = '0.1.0'
 LOG = logging.getLogger(__name__)
 
 
+def _parse_mute_state(response: str | None, command: str = 'MUTE') -> bool | None:
+    """Parse a mute query response (True=muted, False=unmuted).
+
+    The device answers !MUTE? with !MUTEON/!MUTEOFF rather than !MUTE(0|1), so
+    accept both forms.
+    """
+    if not response:
+        return None
+
+    if f'!{command}ON' in response:
+        return True
+
+    if f'!{command}OFF' in response:
+        return False
+
+    if f'!{command}(' in response:
+        return response.split('(')[1].split(')')[0] == '1'
+
+    return None
+
 
 class PowerControl:
     """Power control interface."""
@@ -117,11 +137,7 @@ class MuteControl:
 
     def get(self) -> bool | None:
         """Get mute status (True=muted, False=unmuted)."""
-        response = self._client._send_command('!MUTE?')
-        if response and '!MUTE(' in response:
-            state = response.split('(')[1].split(')')[0]
-            return state == '1'
-        return None
+        return _parse_mute_state(self._client._send_command('!MUTE?'))
 
 
 class SourceControl:
@@ -256,11 +272,7 @@ class Zone2MuteControl:
 
     def get(self) -> bool | None:
         """Get Zone 2 mute status."""
-        response = self._client._send_command('!ZMUTE?')
-        if response and '!ZMUTE(' in response:
-            state = response.split('(')[1].split(')')[0]
-            return state == '1'
-        return None
+        return _parse_mute_state(self._client._send_command('!ZMUTE?'), 'ZMUTE')
 
 
 class Zone2SourceControl:
@@ -770,11 +782,7 @@ class AsyncMuteControl(MuteControl):
         return await self._client._send_command('!MUTE')
 
     async def get(self) -> bool | None:
-        response = await self._client._send_command('!MUTE?')
-        if response and '!MUTE(' in response:
-            state = response.split('(')[1].split(')')[0]
-            return state == '1'
-        return None
+        return _parse_mute_state(await self._client._send_command('!MUTE?'))
 
 
 class AsyncSourceControl(SourceControl):
@@ -871,11 +879,7 @@ class AsyncZone2MuteControl(Zone2MuteControl):
         return await self._client._send_command('!ZMUTE')
 
     async def get(self) -> bool | None:
-        response = await self._client._send_command('!ZMUTE?')
-        if response and '!ZMUTE(' in response:
-            state = response.split('(')[1].split(')')[0]
-            return state == '1'
-        return None
+        return _parse_mute_state(await self._client._send_command('!ZMUTE?'), 'ZMUTE')
 
 
 class AsyncZone2SourceControl(Zone2SourceControl):
