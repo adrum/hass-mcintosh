@@ -11,6 +11,34 @@ DEFAULT_IP_PORT = 84
 RESPONSE_EOL = '\r'
 COMMAND_EOL = '\r'
 
+# at verbosity 2 the device echoes each command back with this prefix before
+# sending the actual '!' reply
+ECHO_PREFIX = '#'
+
+# only query commands produce a '!' reply; set commands are answered with the
+# echo alone, so waiting for anything more times out
+QUERY_SUFFIX = '?'
+
+# commands whose reply token differs from the command token
+REPLY_OVERRIDES = {
+    '!PING?': '!PONG',
+}
+
+
+def expected_reply_prefix(command: str) -> str:
+    """Return the leading token a reply to command must start with.
+
+    '!VOL?' -> '!VOL', which matches '!VOL(28)'.
+    '!MUTE?' -> '!MUTE', which matches both '!MUTEOFF' and '!MUTE(0)'.
+    """
+    if override := REPLY_OVERRIDES.get(command):
+        return override
+
+    token = command
+    for delimiter in ('(', '?', '+', '-'):
+        token = token.split(delimiter, 1)[0]
+    return token
+
 # rate limiting differs by model
 MX160_MIN_TIME_BETWEEN_COMMANDS = 0.4  # seconds
 MX170_MIN_TIME_BETWEEN_COMMANDS = 0.4  # seconds

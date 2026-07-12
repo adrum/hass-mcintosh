@@ -10,8 +10,11 @@ import serial
 
 from .models import (
     get_model_config,
+    expected_reply_prefix,
     SUPPORTED_MODELS,
     COMMAND_EOL,
+    ECHO_PREFIX,
+    QUERY_SUFFIX,
     RESPONSE_EOL,
     SOURCES,
 )
@@ -20,6 +23,7 @@ from .protocol import async_get_protocol
 __version__ = '0.1.0'
 
 LOG = logging.getLogger(__name__)
+
 
 
 class PowerControl:
@@ -596,8 +600,20 @@ class McIntoshSync:
         if init_cmd := self._model_config.get('connection_init'):
             self._send_command(init_cmd, wait_for_reply=False)
 
-    def _send_command(self, command: str, wait_for_reply: bool = True) -> str | None:
-        """Send command and return response."""
+    def _send_command(
+        self, command: str, wait_for_reply: bool | None = None
+    ) -> str | None:
+        """Send command and return response.
+
+        Only query commands ('!VOL?') get a '!' reply; the device answers a set
+        command ('!VOL(15)') with the echo alone, so waiting on one would block
+        until the timeout.
+        """
+        if wait_for_reply is None:
+            wait_for_reply = command.endswith(QUERY_SUFFIX)
+
+        expected_prefix = expected_reply_prefix(command) if wait_for_reply else None
+
         with self._lock:
             # clear buffers
             self._port.reset_output_buffer()
@@ -614,25 +630,41 @@ class McIntoshSync:
             if not wait_for_reply:
                 return None
 
-            # read response
-            result = bytearray()
+            # read response, skipping the echoed command that the device sends
+            # back as '#CMD' at verbosity 2 before the actual '!REPLY'
             eol_bytes = RESPONSE_EOL.encode('ascii')
 
             while True:
-                c = self._port.read(1)
-                if not c:
-                    LOG.warning(f'Timeout waiting for response to {command}')
-                    raise serial.SerialTimeoutException(
-                        f'Connection timed out! Last received: {bytes(result)}'
-                    )
+                result = bytearray()
 
-                result += c
-                if result.endswith(eol_bytes):
-                    break
+                while True:
+                    c = self._port.read(1)
+                    if not c:
+                        LOG.warning(f'Timeout waiting for response to {command}')
+                        raise serial.SerialTimeoutException(
+                            f'Connection timed out! Last received: {bytes(result)}'
+                        )
 
-            response = bytes(result).decode('ascii').strip()
-            LOG.debug(f'Received: {response}')
-            return response
+                    result += c
+                    if result.endswith(eol_bytes):
+                        break
+
+                response = bytes(result).decode('ascii', errors='ignore').strip()
+                if not response:
+                    continue
+
+                if response.startswith(ECHO_PREFIX):
+                    LOG.debug(f'Ignoring echoed command: {response}')
+                    continue
+
+                # replies carry no request id, so match on the leading token;
+                # anything else is an unsolicited status message
+                if expected_prefix and not response.startswith(expected_prefix):
+                    LOG.debug(f'Ignoring unsolicited message: {response}')
+                    continue
+
+                LOG.debug(f'Received: {response}')
+                return response
 
 
 class McIntoshAsync:
@@ -656,11 +688,23 @@ class McIntoshAsync:
         self.device = AsyncDeviceControl(self)
 
     async def _send_command(
-        self, command: str, wait_for_reply: bool = True
+        self, command: str, wait_for_reply: bool | None = None
     ) -> str | None:
-        """Send command and return response."""
+        """Send command and return response.
+
+        Only query commands ('!VOL?') get a '!' reply; the device answers a set
+        command ('!VOL(15)') with the echo alone, so waiting on one would block
+        until the timeout.
+        """
+        if wait_for_reply is None:
+            wait_for_reply = command.endswith(QUERY_SUFFIX)
+
         request = (command + COMMAND_EOL).encode('ascii')
-        return await self._protocol.send(request, wait_for_reply=wait_for_reply)
+        return await self._protocol.send(
+            request,
+            wait_for_reply=wait_for_reply,
+            expected_prefix=expected_reply_prefix(command) if wait_for_reply else None,
+        )
 
 
 # async versions of control classes

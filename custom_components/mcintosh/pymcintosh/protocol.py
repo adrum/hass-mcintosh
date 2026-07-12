@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Optional
 
+from .models import ECHO_PREFIX
+
 LOG = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 2.0
@@ -96,8 +98,17 @@ async def async_get_protocol(
 
         @locked_method
         @ensure_connected
-        async def send(self, request: bytes, wait_for_reply: bool = True) -> Optional[str]:
-            """Send command and optionally wait for response."""
+        async def send(
+            self,
+            request: bytes,
+            wait_for_reply: bool = True,
+            expected_prefix: Optional[str] = None,
+        ) -> Optional[str]:
+            """Send command and optionally wait for response.
+
+            :param expected_prefix: leading token the reply must start with. Any
+                other '!' line is an unsolicited status message and is skipped.
+            """
             await self._throttle_requests()
 
             # clear buffers
@@ -122,22 +133,31 @@ async def async_get_protocol(
                 while True:
                     data += await asyncio.wait_for(self._q.get(), self._timeout)
 
-                    if response_eol_bytes in data:
-                        LOG.debug(
-                            f'Received: {data.decode("ascii", errors="ignore")} (len={len(data)})'
-                        )
+                    # consume every complete line received so far; a single read
+                    # may span both the echo and the reply, or split either
+                    while response_eol_bytes in data:
+                        line, _, rest = data.partition(response_eol_bytes)
+                        data = bytearray(rest)
 
-                        # split by EOL and filter empty lines
-                        lines = data.split(response_eol_bytes)
-                        lines = [line for line in lines if line]
+                        if not line:
+                            continue
 
-                        if not lines:
-                            return ''
+                        response = line.decode('ascii', errors='ignore')
 
-                        if len(lines) > 1:
-                            LOG.debug(f'Multiple response lines, using first: {lines}')
+                        # at verbosity 2 the device echoes the command back as
+                        # '#CMD' before sending the '!REPLY' we actually want
+                        if response.startswith(ECHO_PREFIX):
+                            LOG.debug(f'Ignoring echoed command: {response}')
+                            continue
 
-                        return lines[0].decode('ascii', errors='ignore')
+                        # replies carry no request id, so match on the leading
+                        # token; anything else is an unsolicited status message
+                        if expected_prefix and not response.startswith(expected_prefix):
+                            LOG.debug(f'Ignoring unsolicited message: {response}')
+                            continue
+
+                        LOG.debug(f'Received: {response}')
+                        return response
 
             except asyncio.TimeoutError:
                 LOG.warning(
